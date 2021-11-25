@@ -199,7 +199,5 @@ def main():
             
             print("Elapsed execution time [s]:", end - start)
     
-    
-
 if __name__ == "__main__":
     main()

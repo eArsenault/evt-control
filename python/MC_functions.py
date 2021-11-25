@@ -7,7 +7,11 @@ def antiderivative(y, p):
     #computes the antiderivative for our moment estimator
     #p is array of parameters
     K, a, g, M, z = p
-    val = (K * a**(1/g) / (M * (g - 1))) * (y + a - g * z) / (g * (y - z) + a) ** (1/g)
+    if (g * (y - z) + a)**(1/g) == 0.0:
+        #print('Fail')
+        val = 100
+    else:
+        val = (K * a**(1/g) / (M * (g - 1))) * (y + a - g * z) / (g * (y - z) + a) ** (1/g)
     return val
 
 @jit(nopython=True)
@@ -57,12 +61,13 @@ def estimator_mean(Z, eparams):
     est = Z.mean()
     return est
 
+@jit(nopython=True)
 def estimator_moment(Z, eparams):
     al, n = eparams[0:2]
 
     X = np.sort(Z)
     var = np.quantile(X, 1 - al)
-    i = np.abs(X - var).argmin()
+    i = np.abs(X - var).argmin() - 1
 
     #python is zero-indexed, so we subtract (i+1)
     K = n - i - 1.0
@@ -70,25 +75,34 @@ def estimator_moment(Z, eparams):
 
     M1 = (1/K) * ((np.log(X[i:]) - np.log(X[i]))**1).sum()
     M2 = (1/K) * ((np.log(X[i:]) - np.log(X[i]))**2).sum()
-    ga = M1 + 1 - (1/2) / (1 - (M1**2)/M2)
+    if M2 == 0:
+        ga = 0.1
+    elif (1 - (M1**2)/M2) == 0.0:
+        ga = -1000
+    else:    
+        ga = M1 + 1 - (1/2) / (1 - (M1**2)/M2)
+
     a = z_mk * M1 * (1 - ga + M1)
 
-    Z_max = 2
+    Z_max = 2.5
     aparams = np.array([K, a, ga, n, z_mk])
     if (ga == 0) or (ga == 1) or ((ga < 0) and (z_mk > -1/ga)) or (np.isnan(ga)):
+        #print("option1")
         est = X.max()
     elif ((ga < 0) and (Z_max < -1/ga)) or (ga > 0): #H_ga defined for y in (0, 1/(max(0,-ga))
+        #print("option2")
         y1 = z_mk
         y2 = Z_max
         est = antiderivative(y2,aparams) - antiderivative(y1,aparams)
     else:
+        #print("option3")
         y1 = z_mk
         y2 = -1/ga
         est = antiderivative(y2,aparams) - antiderivative(y1,aparams)
     
     return est
-    
 
+@jit(nopython=True)
 def mc_run(x_i, N, M, eparams, sparams, dparams):
     cost_arr = np.zeros((M,N))
     ub, lb, ub_k, lb_k, U_max, U_min, dU, std = sparams
@@ -139,10 +153,11 @@ def mc_run(x_i, N, M, eparams, sparams, dparams):
             #update x according to environment, continue
             w = np.random.normal(0, std)
             for v in range(N):
-                if v == N - 1:
-                    x[v] = dynamics_snap(x[v:], u_min[v], w, dparams, ub, lb)
+                if v < N - 1:
+                    val = dynamics_snap(x[v:(v + 1)], u_min[v], w, dparams, ub, lb)
                 else:
-                    x[v] = dynamics_snap(x[v:(v + 1)], u_min[v], w, dparams, ub, lb)
+                    val = dynamics_snap(x[v:], u_min[v], w, dparams, ub, lb)
+                x[v] = val[0]
         
         #store the total cost of this trial
         cost_arr[k,:] = total_cost
@@ -161,17 +176,30 @@ def main():
     C = 2.0
     dparams = np.array([np.exp(-dt/(C*R)), 32.0, eta*R*P ])
 
-    #define our estimator parameters (an array of all floats: we cast to int when necessary)
-    #this is so it can be accelerated using numba, cannot have mixed-type arrays/lists
-    eparams = np.array([0.05, 1000.0, 0.0, 0.0]) #al, n, est_code, t
+    #set the alpha
+    al = 0.05
 
-    M = 100
-    start = time.time()
-    print("hello")
-    cost_arr = mc_run(20.5, 4, M, eparams, sparams, dparams)
-    print(cost_arr)
-    end = time.time()
-    print(end - start)
+    #set the possible values for x, n to loop over (lower n are faster to run!)
+    #note that in Python, {i in range(10)} = {0,1,2,...,9}
+    x_vals = np.array([20.5])
+    n_vals = np.array([float(5*(i + 1)) for i in range(20)] + [float(10*(i + 1) + 100) for i in range(10)])
+
+    for x_init in x_vals:
+        for n in n_vals:
+            #define our estimator parameters (an array of all floats: we cast to int when necessary)
+            #this is so it can be accelerated using numba, cannot have mixed-type arrays/lists
+            eparams = np.array([al, n, 0.0, 0.0]) #al, n, est_code, t
+            file_name = "..\..\data\mc_x" + str(x_init) + "_std" + str(sparams[-1]) +"_n" + str(int(eparams[1])) + "_al" + str(eparams[0])
+            
+            start = time.time()
+            M = 100000
+            cost_arr = mc_run(x_init, 4, M, eparams, sparams, dparams)
+            end = time.time()
+            np.save(file_name, cost_arr)
+            
+            print("Elapsed execution time [s]:", end - start)
+    
+    
 
 if __name__ == "__main__":
     main()

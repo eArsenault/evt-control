@@ -21,7 +21,7 @@ for k = 1:m
             xplus_mc = dynamics_snap(x, u, w_mc, sp.params, sp.bounds);
 
             %observe Z_{i+1} via linear interpolation along the grid
-            Z = lerp(xplus_mc, sp.S, sp.S_grid, cost(sp.S, max(sp.K), min(sp.K)) + J(i+1,:));
+            Z = lerp(xplus_mc, sp.S, sp.S_grid, sp.S, max(sp.K), min(sp.K)) + J(i+1,:));
 
             %apply estimator
             switch eparams.estimator

@@ -103,6 +103,41 @@ def estimator_moment(Z, eparams):
     return est
 
 @jit(nopython=True)
+def estimator_pwme(Z, eparams):
+    al, n = eparams[0:2]
+    c, d = [0.0, 0.0] #can also try [-0.35, 0.0]
+    
+    X = np.sort(Z)
+    var = np.quantile(X, 1 - al)
+    i = np.abs(X - var).argmin() - 1
+
+    #python is zero-indexed, so we subtract (i+1)
+    K = n - i - 1.0
+    z_mk = X[i]
+    i_arr = n - 1.0 - np.arange(i,n) #gives an array of size K + 1, going 1, K-1/K, ... , 1/K, 0/K
+
+    M1 = (1/K) * ((np.log(X[i:]) - np.log(X[i]))**1).sum()
+    M2 = (1/K) * ((np.log(X[i:]) - np.log(X[i]))**2).sum()
+    
+    P = (1/K) * ((X[i:] - X[i])).sum()
+    Q = (1/K) * ((i_arr + c)/(K + d) * (X[i:] - X[i])).sum()
+
+    ga = 1 - (P/(2*Q) - 1)**(-1)
+    a = P * (P/(2*Q) - 1)**(-1)
+    aparams = np.array([K, a, ga, n, z_mk])
+
+    if (ga == 0) or (ga == 1) or ((ga < 0) and (z_mk > -1/ga)) or (np.isnan(ga)):
+        #print("option1")
+        est = X.max()
+    else: #since ga < 1, our integral can go to infinity
+        #print("option2")
+        y1 = z_mk #antiderivative evaluated at infinity is 0
+        est = - antiderivative(y1,aparams)
+        print(est)
+    
+    return est
+
+@jit(nopython=True)
 def mc_run(x_i, N, M, eparams, sparams, dparams):
     cost_arr = np.zeros((M,N))
     ub, lb, ub_k, lb_k, U_max, U_min, dU, std = sparams

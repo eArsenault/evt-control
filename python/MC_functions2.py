@@ -105,7 +105,7 @@ def estimator_moment(Z, eparams):
 @jit(nopython=True)
 def estimator_pwme(Z, eparams):
     al, n = eparams[0:2]
-    c, d = [0.0, 0.0] #can also try [-0.35, 0.0]
+    c, d = [-0.35, 0.0] #base is [0.0, 0.0]
     
     X = np.sort(Z)
     var = np.quantile(X, 1 - al)
@@ -141,7 +141,7 @@ def estimator_pwme(Z, eparams):
 
 @jit(nopython=True)
 def mc_run(x_i, N, M, eparams, sparams, dparams):
-    cost_arr = np.zeros((M,N))
+    cost_arr = np.zeros((3,M,N)) #we save three different cost criteria
     ub, lb, ub_k, lb_k, U_max, U_min, dU = sparams
     U = np.array([U_min + dU*j for j in range(int((U_max - U_min) / dU) + 1)])
     #print(U)
@@ -150,12 +150,18 @@ def mc_run(x_i, N, M, eparams, sparams, dparams):
 
     for k in range(M):
         #perform M trials
-        total_cost = np.zeros(N)
+        sum_cost = np.zeros(N)
+        max_cost = np.zeros(N)
+        mul_cost = np.ones(N)
+
         x = x_i*np.ones(N)
 
         for i in range(12):
             #evaluate current cost, add to total -> loop over the time horizon here
-            total_cost = total_cost + cost(x, ub_k, lb_k, 1)
+            sum_cost = sum_cost + cost(x, ub_k, lb_k, 1)
+            max_cost = np.maximum(max_cost, cost(x, ub_k, lb_k, 1))
+            mul_cost = mul_cost * (cost(x, ub_k, lb_k, 1) + np.ones(N))
+
             u_min = np.zeros(N)
             Z_min = 10000.0*np.ones(N)
 
@@ -197,7 +203,9 @@ def mc_run(x_i, N, M, eparams, sparams, dparams):
                 x[v] = val[0]
         
         #store the total cost of this trial
-        cost_arr[k,:] = total_cost + cost(x, ub_k, lb_k, 1) #the last cost term is our terminal cost
+        cost_arr[0,k,:] = sum_cost + cost(x, ub_k, lb_k, 1) #the last cost term is our terminal cost
+        cost_arr[1,k,:] = np.maximum(max_cost, cost(x, ub_k, lb_k, 1))
+        cost_arr[2,k,:] = mul_cost * (cost(x, ub_k, lb_k, 1) + np.ones(N))
     
     return cost_arr
 
@@ -220,7 +228,7 @@ def main():
     #set the possible values for x, n to loop over (lower n are faster to run!)
     #note that in Python, {i in range(10)} = {0,1,2,...,9}
     x_vals = np.array([20.5])
-    n_vals = np.array([float(5*(i + 1)) for i in range(3,10)]) # + [float(10*(i + 1) + 100) for i in range(10)])
+    n_vals = np.array([2.0]) #np.array([float(5*(i + 1)) for i in range(3,10)]) # + [float(10*(i + 1) + 100) for i in range(10)])
 
     for x_init in x_vals:
         for n in n_vals:
@@ -230,10 +238,11 @@ def main():
             file_name = "..\..\data_mc2\mc_x" + str(x_init) + "_std" + str(dparams[-1]) +"_n" + str(int(eparams[1])) + "_al" + str(eparams[0])
             
             start = time.time()
-            M = 1000
+            M = 50000
             cost_arr = mc_run(x_init, 4, M, eparams, sparams, dparams)
             end = time.time()
             #np.save(file_name, cost_arr)
+            print(cost_arr.shape)
             
             print("Elapsed execution time [s]:", end - start)
             #print(cost_arr)

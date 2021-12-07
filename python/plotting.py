@@ -9,12 +9,12 @@ def extract_n(file_name):
 
 def process_data(files, n_vals, params):
     al, lamb, M = params
-    data_stor = np.zeros((4,30,4))
+    data_stor = np.zeros((4,7,4))
 
     for f in files:
         index = np.where(n_vals == extract_n(f))[0][0]
 
-        Y_total = np.load(os.path.join("data", f))
+        Y_total = np.load(os.path.join("data_mc2", f))
         for i in range(4):
             Y = Y_total[:,i]
 
@@ -41,10 +41,10 @@ def get_ylabel(t):
     return yl
 
 def main():
-    n = np.array([float(5*(i + 1)) for i in range(20)] + [float(10*(i + 1) + 100) for i in range(10)])
-    files = os.listdir(".\data")
+    n = np.array([float(5*(i + 1)) for i in range(3,10)]) #np.array([float(5*(i + 1)) for i in range(20)] + [float(10*(i + 1) + 100) for i in range(10)])
+    files = os.listdir(".\data_mc2")
 
-    y = process_data(files, n, [0.05, 1.0, 100000.0])
+    y = process_data(files, n, [0.0005, 1.0, 500000.0])
 
     #we plot the various evaluators in order: mean + var, max, cvar, and mean + fraction above
     fig, axs = plt.subplots(2,2)

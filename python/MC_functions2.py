@@ -1,6 +1,6 @@
 import numpy as np
 import time
-from numba import jit
+from numba import jit, prange
 
 @jit(nopython=True)
 def antiderivative(y, p):
@@ -105,7 +105,7 @@ def estimator_moment(Z, eparams):
 @jit(nopython=True)
 def estimator_pwme(Z, eparams):
     al, n = eparams[0:2]
-    c, d = [-0.35, 0.0] #base is [0.0, 0.0]
+    c, d = [0.1, 0.0] #base is [0.0, 0.0]
     
     X = np.sort(Z)
     var = np.quantile(X, 1 - al)
@@ -139,44 +139,43 @@ def estimator_pwme(Z, eparams):
     
     return est
 
-@jit(nopython=True)
+@jit(nopython=True, parallel=True)
 def mc_run(x_i, N, M, eparams, sparams, dparams):
-    cost_arr = np.zeros((3,M,N)) #we save three different cost criteria
+    cost_arr = np.zeros((2,M,N)) #we save two different cost criteria
     ub, lb, ub_k, lb_k, U_max, U_min, dU = sparams
     U = np.array([U_min + dU*j for j in range(int((U_max - U_min) / dU) + 1)])
-    #print(U)
+    print(U)
     #print(int(eparams[1]))
     #print(cost(x_i, ub_k, lb_k, 1))
 
-    for k in range(M):
+    for k in range(M): #can change this to prange if so desired, not sure if helps/works/hinders
         #perform M trials
         sum_cost = np.zeros(N)
         max_cost = np.zeros(N)
-        mul_cost = np.ones(N)
 
         x = x_i*np.ones(N)
 
-        for i in range(12):
+        for i in range(2):
             #evaluate current cost, add to total -> loop over the time horizon here
             sum_cost = sum_cost + cost(x, ub_k, lb_k, 1)
             max_cost = np.maximum(max_cost, cost(x, ub_k, lb_k, 1))
-            mul_cost = mul_cost * (cost(x, ub_k, lb_k, 1) + np.ones(N))
 
             u_min = np.zeros(N)
             Z_min = 10000.0*np.ones(N)
+            print("Step ", i)
 
             for j in range(int((U_max - U_min) / dU) + 1):
                 #action selection, loop over possible actions
                 u = U[j]
 
                 #sample w_i n times, run through dynamics
-                w_mc = np.array([np.random.normal(0, dparams[3]) for w in range(int(eparams[1]))])
+                w_mc = np.array([np.random.normal(0.3, dparams[3]) for w in range(int(eparams[1]))])
                 for v in range(N):
                     #this whole loop can probably be vectorized
                     x_pmc = dynamics(x[v], u, w_mc, dparams[:3])
 
                     #use our simulator to get n cost observations
-                    Z = simulator(x_pmc, ub_k, lb_k, dparams, int(eparams[1]), i)
+                    Z = cost(x_pmc, ub_k, lb_k, int(eparams[1]))#simulator(x_pmc, ub_k, lb_k, dparams, int(eparams[1]), i)
 
                     #apply estimators to evaluate that action in 4 distinct ways
                     if v == 0:
@@ -194,7 +193,7 @@ def mc_run(x_i, N, M, eparams, sparams, dparams):
                         Z_min[v] = Z_eval
 
             #update x according to environment, continue
-            w = np.random.normal(0, dparams[3])
+            w = np.random.normal(0.3, dparams[3])
             for v in range(N):
                 if v < N - 1:
                     val = dynamics(x[v:(v + 1)], u_min[v], w, dparams[:3])
@@ -205,13 +204,12 @@ def mc_run(x_i, N, M, eparams, sparams, dparams):
         #store the total cost of this trial
         cost_arr[0,k,:] = sum_cost + cost(x, ub_k, lb_k, 1) #the last cost term is our terminal cost
         cost_arr[1,k,:] = np.maximum(max_cost, cost(x, ub_k, lb_k, 1))
-        cost_arr[2,k,:] = mul_cost * (cost(x, ub_k, lb_k, 1) + np.ones(N))
     
     return cost_arr
 
 def main():
     #define sysparams [ub, lb, ub_k, lb_k, U_max, U_min, dU]
-    sparams = np.array([23.0, 18.0, 21.0, 20.0, 2.0, 0.0, 0.2])
+    sparams = np.array([23.0, 18.0, 21.0, 20.0, 2.0, 0.0, 0.25])
 
     #define our dynamics parameters
     dt = 5/60
@@ -219,7 +217,7 @@ def main():
     R = 2.0
     P = 16.0
     C = 2.0
-    std = 0.5
+    std = 0.8
     dparams = np.array([np.exp(-dt/(C*R)), 32.0, eta*R*P, std]) 
 
     #set the alpha
@@ -228,17 +226,17 @@ def main():
     #set the possible values for x, n to loop over (lower n are faster to run!)
     #note that in Python, {i in range(10)} = {0,1,2,...,9}
     x_vals = np.array([20.5])
-    n_vals = np.array([2.0]) #np.array([float(5*(i + 1)) for i in range(3,10)]) # + [float(10*(i + 1) + 100) for i in range(10)])
+    n_vals = np.array([10.0]) #np.array([float(5*(i + 1)) for i in range(3,10)]) # + [float(10*(i + 1) + 100) for i in range(10)])
 
     for x_init in x_vals:
         for n in n_vals:
             #define our estimator parameters (an array of all floats: we cast to int when necessary)
             #this is so it can be accelerated using numba, cannot have mixed-type arrays/lists
             eparams = np.array([al, n, 0.0, 0.0]) #al, n, est_code, t
-            file_name = "..\..\data_mc2\mc_x" + str(x_init) + "_std" + str(dparams[-1]) +"_n" + str(int(eparams[1])) + "_al" + str(eparams[0])
+            file_name = "..\..\data_mc4\mc_x" + str(x_init) + "_std" + str(dparams[-1]) +"_n" + str(int(eparams[1])) + "_al" + str(eparams[0])
             
             start = time.time()
-            M = 50000
+            M = 5
             cost_arr = mc_run(x_init, 4, M, eparams, sparams, dparams)
             end = time.time()
             #np.save(file_name, cost_arr)
@@ -266,7 +264,7 @@ def simulator(x_init, ub_k, lb_k, dparams, n, t):
     total_cost = np.zeros(n) + cost(x_init, ub_k, lb_k, n)
     x = x_init
 
-    for dt in range(11 - t): #t is our i from main loop, if i == 11 this loop is void
+    for dt in range(1 - t): #t is our i from main loop, if i == 1 this loop is void
         u = policy(x,n)
         w = np.array([np.random.normal(0, dparams[3]) for w in range(int(n))])
         x = dynamics(x, u, w, dparams[:3])

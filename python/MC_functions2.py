@@ -25,8 +25,8 @@ def cost(x, ub_k, lb_k, N):
 @jit(nopython=True)
 def dynamics(x, u, w, params):
     #computes x_{t+1} = f(x_t,u_t,w_t)
-    a, b, nRP = params
-    x_t1 = (a * x) + (1.0 - a) * (b - nRP * u) + w
+    a, b, c, d = params
+    x_t1 = a * x + b * u + c * w + d
     return x_t1
 
 @jit(nopython=True)
@@ -162,17 +162,17 @@ def mc_run(x_i, N, M, eparams, sparams, dparams):
 
             u_min = np.zeros(N)
             Z_min = 10000.0*np.ones(N)
-            print("Step ", i)
+            #print("Step ", i)
 
             for j in range(int((U_max - U_min) / dU) + 1):
                 #action selection, loop over possible actions
                 u = U[j]
 
                 #sample w_i n times, run through dynamics
-                w_mc = np.array([np.random.normal(0.3, dparams[3]) for w in range(int(eparams[1]))])
+                w_mc = np.array([np.random.normal(0.3, dparams[4]) for w in range(int(eparams[1]))])
                 for v in range(N):
                     #this whole loop can probably be vectorized
-                    x_pmc = dynamics(x[v], u, w_mc, dparams[:3])
+                    x_pmc = dynamics(x[v], u, w_mc, dparams[:4])
 
                     #use our simulator to get n cost observations
                     Z = cost(x_pmc, ub_k, lb_k, int(eparams[1]))#simulator(x_pmc, ub_k, lb_k, dparams, int(eparams[1]), i)
@@ -193,12 +193,12 @@ def mc_run(x_i, N, M, eparams, sparams, dparams):
                         Z_min[v] = Z_eval
 
             #update x according to environment, continue
-            w = np.random.normal(0.3, dparams[3])
+            w = np.random.normal(0.3, dparams[4])
             for v in range(N):
                 if v < N - 1:
-                    val = dynamics(x[v:(v + 1)], u_min[v], w, dparams[:3])
+                    val = dynamics(x[v:(v + 1)], u_min[v], w, dparams[:4])
                 else:
-                    val = dynamics(x[v:], u_min[v], w, dparams[:3])
+                    val = dynamics(x[v:], u_min[v], w, dparams[:4])
                 x[v] = val[0]
         
         #store the total cost of this trial
@@ -212,13 +212,12 @@ def main():
     sparams = np.array([23.0, 18.0, 21.0, 20.0, 2.0, 0.0, 0.25])
 
     #define our dynamics parameters
-    dt = 5/60
-    eta = 0.9
-    R = 2.0
-    P = 16.0
-    C = 2.0
+    a = 0.978
+    b = -0.594
+    c = 1.0
+    d = 0.660
     std = 0.8
-    dparams = np.array([np.exp(-dt/(C*R)), 32.0, eta*R*P, std]) 
+    dparams = np.array([a, b, c, d, std]) 
 
     #set the alpha
     al = 0.05
@@ -246,13 +245,12 @@ def main():
             #print(cost_arr)
 
 def main_test():
-    dt = 5/60
-    eta = 0.9
-    R = 2.0
-    P = 16.0
-    C = 2.0
-    std = 1.0
-    dparams = np.array([np.exp(-dt/(C*R)), 32.0, eta*R*P, std]) 
+    a = 0.978
+    b = -0.594
+    c = 1.0
+    d = 0.660
+    std = 0.8
+    dparams = np.array([a, b, c, d, std]) 
 
     X = np.array([22.0, 21.0, 21.0, 20.0])
     Z = simulator(X, 21.0, 20.0, dparams, int(4.0), int(10))

@@ -2,7 +2,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats as st
 from statsmodels.distributions.empirical_distribution import ECDF
+import random
 
+def get_seeds(N, s):
+    #initialize the random state within the function
+    random.seed(s)
+    seeds = np.zeros(N, dtype=int)
+    for i in range(N):
+        seeds[i] = random.randint(100000, 999999)
+    
+    return seeds
+    
 def sample_weibull(M, K, c, s):
     A = st.weibull_min.rvs(c, loc=0, scale=1, size=(M,K), random_state=np.random.RandomState(seed=s))
     return A

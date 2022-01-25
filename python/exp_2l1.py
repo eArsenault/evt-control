@@ -15,7 +15,6 @@ norm_arr_h = np.zeros((len(N_arr), M))
 norm_arr_e = np.zeros((len(N_arr), M))
 seed_arr = hf.get_seeds(len(N_arr), 123456)
 
-
 for r in range(len(rvs_arr)):
     for j in range(len(N_arr)):
         #generate samples from distribution
@@ -34,8 +33,8 @@ for r in range(len(rvs_arr)):
                 t_z = t[t >= z]
                 F_gt = hf.cdf_gt(t_z, rvs_arr[r], c_arr[r])
 
-                norm_arr_h[j,i] = np.abs(hf.cdf_emp(t_z, X[i,:]) - F_gt).max() 
-                norm_arr_e[j,i] = np.abs(hf.cdf_evt(t_z, params) - F_gt).max()
+                norm_arr_h[j,i] = np.abs(hf.cdf_emp(t_z, X[i,:]) - F_gt).mean() 
+                norm_arr_e[j,i] = np.abs(hf.cdf_evt(t_z, params) - F_gt).mean()
 
         print("Iteration done for N ==", N_arr[j])
 
@@ -55,7 +54,7 @@ for r in range(len(rvs_arr)):
     ax.fill_between(N_arr, norm_e_mean - norm_e_std, norm_e_mean + norm_e_std, alpha=0.2, color="green", interpolate=True)
 
     ax.set_xlabel(r'$n$')
-    ax.set_ylabel("sup-norm")
+    ax.set_ylabel("L1-norm")
     ax.legend()
 
-    plt.savefig(os.path.join("plots","exp_2" + str(r + 1) + "M" + str(M) + ".png"))
+    plt.savefig(os.path.join("plots","exp_2l1" + str(r + 1) + "M" + str(M) + ".png"))

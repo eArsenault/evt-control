@@ -1,177 +1,278 @@
 import numpy as np
-import time
-from numba import jit
+import random
+import scipy.stats as st
+from scipy.special import expit, logit
+from scipy.optimize import minimize
+from statsmodels.distributions.empirical_distribution import ECDF
+from scipy.interpolate import interp1d
 
-@jit(nopython=True)
-def antiderivative(y, p):
-    #computes the antiderivative for our moment estimator
-    #p is array of parameters
-    K, a, g, M, z = p
-    val = (K * a**(1/g) / (M * (g - 1))) * (y + a - g * z) / (g * (y - z) + a) ** (1/g)
-    return val
+ad_quantiles = np.loadtxt("ADQuantiles.csv", delimiter=",",
+                          dtype=float, skiprows=1, usecols=range(1, 1000))
+ad_pvals = np.round(np.linspace(0.999, 0.001, 1000), 3)  # col names
+ad_shape = np.round(np.linspace(-0.5, 1, 151), 2)  # row names
 
-@jit(nopython=True)
-def cost(x, ub_k, lb_k, N):
-    #K = [lb_k, ub_k]
-    #N is the size of X as an 1D-array
-    z = np.zeros(N)
-    c = np.maximum(np.maximum(x - ub_k, lb_k - x), z)
-    return c
+def cdf_emp(X, X_0):
+    F = ECDF(X_0)
+    return F(X)
 
-@jit(nopython=True)
-def dynamics(x, u, w, params):
-    #computes x_{t+1} = f(x_t,u_t,w_t)
-    a, b, nRP = params
-    x_t1 = (a * x) + (1 - a) * (b - nRP * u) + w
-    return x_t1
-
-@jit(nopython=True)
-def dynamics_snap(x, u, w, params, ub, lb):
-    #ensures that x_{t+1} \in [lb, ub]
-    x_t1 = dynamics(x, u, w, params)
-    x_t1[x_t1 > ub] = ub
-    x_t1[x_t1 < lb] = lb
-    return x_t1
-
-@jit(nopython=True)
-def estimator_cvar(Z, eparams):
-    al, n = eparams[0:2]
-    var = np.quantile(Z, 1 - al)
-
-    if al == 0:
-        est = Z.max()
+def cdf_evt(Y_ex, n, ga, b, K):
+    if np.abs(ga) < 0.001: #threshold for ga close to 0
+        cdf = 1 - (K / n) * np.exp(-Y_ex / b)
     else:
-        #if Z < var, set it to var to Z - var = 0
-        #then it won't contribute to expectation
-        Z[Z < var] = var 
-        est = var + (Z - var).sum() / (n * al)
-    return est
+        #print(ga, b)
+        cdf = 1 - (K / n) * (1 + ga * (Y_ex / b))**(-1/ga)
+    return cdf
+    
+def cdf_gt(X, rv, c):
+    return rv.cdf(X, c, loc=0, scale=1)
 
-@jit(nopython=True)
-def estimator_max(Z, eparams):
-    est = Z.max()
-    return est
+def cdf_gt_noparam(X, rv):
+    return rv.cdf(X, loc=0, scale=1)
 
-@jit(nopython=True)
-def estimator_mean(Z, eparams):
-    est = Z.mean()
-    return est
-
-def estimator_moment(Z, eparams):
-    al, n = eparams[0:2]
-
-    X = np.sort(Z)
-    var = np.quantile(X, 1 - al)
-    i = np.abs(X - var).argmin()
-
-    #python is zero-indexed, so we subtract (i+1)
-    K = n - i - 1.0
-    z_mk = X[i]
-
-    M1 = (1/K) * ((np.log(X[i:]) - np.log(X[i]))**1).sum()
-    M2 = (1/K) * ((np.log(X[i:]) - np.log(X[i]))**2).sum()
-    ga = M1 + 1 - (1/2) / (1 - (M1**2)/M2)
-    a = z_mk * M1 * (1 - ga + M1)
-
-    Z_max = 2
-    aparams = np.array([K, a, ga, n, z_mk])
-    if (ga == 0) or (ga == 1) or ((ga < 0) and (z_mk > -1/ga)) or (np.isnan(ga)):
-        est = X.max()
-    elif ((ga < 0) and (Z_max < -1/ga)) or (ga > 0): #H_ga defined for y in (0, 1/(max(0,-ga))
-        y1 = z_mk
-        y2 = Z_max
-        est = antiderivative(y2,aparams) - antiderivative(y1,aparams)
+#equation 7.19, Quantitative Risk Management, McNeil (integrate the EVT VaR from (1-al) to 1)
+def cvar_evt(al, var, ga, b, u):
+    if np.abs(ga) < 0.001:
+        cvar = var + b
     else:
-        y1 = z_mk
-        y2 = -1/ga
-        est = antiderivative(y2,aparams) - antiderivative(y1,aparams)
+        cvar = var / (1 - ga) + (b - ga * u) / (1 - ga)
+    return cvar
+
+def cvar_emp(X, al, var):
+    v_mat = np.hstack([var.reshape((len(al),1)) for i in range(len(X))])
+    X_mat = np.vstack([X for i in range(len(al))])
+    return  var + (X_mat - v_mat).sum(axis=1,where=X_mat>v_mat) / (len(X) * al)
+
+def estimator_pwme(Y_ex):
+    c, d = [0.0, 0.0] #base is [0.0, 0.0]
+    K = Y_ex.size
+    i_arr = np.flip(np.arange(Y_ex.size)) #array that goes [K-1, K-2, ..., 0]
+
+    #print("New K, i_arr",K,i_arr)
+    #to ensure Q != 0, we make sure u is chosen st. Y[Y > u] is non-empty
+    P = (1/K) * ((Y_ex)).sum()
+    Q = (1/K) * ((i_arr + c)/(K + d) * (Y_ex)).sum() 
+
+    ga = 1 - (P/(2*Q) - 1)**(-1)
+    b = P * (P/(2*Q) - 1)**(-1)
+    return (ga, b)
+
+def exponential_ult(Y, theta):
+    return np.sort(np.exp(-(theta / 2) * Y))
+
+def exp_ult_emp(Y, utility, param):
+    return utility(Y, param).mean()
+
+def exp_ult_evt(Y, utility, param, code1, code2):
+    Y_exp = utility(Y, param)
+
+    thresh = get_threshold(Y_exp, code1, code2, Y.size)[0]
+    Y_ex = get_excesses(Y_exp, thresh)
+    ga, b = get_parameters(code2, Y_ex)
+
+    Y_K = Y_exp[:(Y.size - Y_ex.size)]
+    t1 = Y_K.sum() / Y.size
+
+    #new method goes here
+    al = 0.01
+    var = var_evt(al, ga, b, Y_K[-1], Y_ex.size, Y.size)
+    Y_ex_in = Y_ex[Y_ex < var]
+
+    t2 = Y_ex_in.sum() / Y.size
+    t3 = al * cvar_evt(0, var, ga, b, Y_K[-1])
+
+    return t1 + t2 + t3
+
+def gen(M, K, rv, c, s):
+    return rv.rvs(c, loc=0, scale=1, size=(M,K), random_state=np.random.RandomState(seed=s))
+
+def gen_noparam(M, K, rv, s):
+    return rv.rvs(loc=0, scale=1, size=(M,K), random_state=np.random.RandomState(seed=s))
+
+def get_seeds(N, s):
+    #initialize the random state within the function
+    random.seed(s)
+    seeds = np.zeros(N, dtype=int)
+    for i in range(N):
+        seeds[i] = random.randint(100000, 999999)
     
-    return est
+    return seeds
+
+def ground_truth(N, al, rvs_arr, c_arr, file_name):
+    var_arr = np.zeros((len(rvs_arr), len(al)))
+    cvar_arr = np.zeros((len(rvs_arr), len(al)))
+
+    for r in range(len(rvs_arr)):
+        Y = gen(1, N, rvs_arr[r], c_arr[r], 272542).flatten()
+        var_arr[r,:] = var_emp(Y, al)
+        cvar_arr[r,:] = cvar_emp(Y, al, var_arr[r,:])
+
+    np.save(file_name, np.vstack((var_arr, cvar_arr)))
+
+def ground_truth_meansemi(N, rvs_arr, c_arr, beta, file_name):
+    est_arr = np.zeros(len(rvs_arr))
+
+    for r in range(len(rvs_arr)):
+        if np.isnan(c_arr[r]):
+            Y = gen_noparam(1, N, rvs_arr[r], 272542).flatten()
+        else:
+            Y = gen(1, N, rvs_arr[r], c_arr[r], 272542).flatten()
+
+        est_arr[r] = meansemi_emp(Y, beta)
+
+    np.save(file_name, est_arr)
+
+def meansemi_emp(Y, beta):
+    mu = Y.sum() / Y.size
+    semi = (Y[Y > mu] - mu).sum() / Y.size
+    return mu + beta * semi
+
+def meansemi_evt(Y, beta, ga, b, K): #currently no checking if Y_K[-1] > mu
+    Y.sort()
+    Y_K = Y[:(Y.size - K)]
+    Y_ex = Y[(Y.size - K):]
+    mu = Y.sum() / Y.size
     
+    t1 = (Y_K[Y_K > mu] - mu).sum() / Y.size
 
-def mc_run(x_i, N, M, eparams, sparams, dparams):
-    cost_arr = np.zeros((M,N))
-    ub, lb, ub_k, lb_k, U_max, U_min, dU, std = sparams
-    U = np.array([U_min + dU*j for j in range(int((U_max - U_min) / dU) + 1)])
-    #print(U)
-    #print(int(eparams[1]))
-    #print(cost(x_i, ub_k, lb_k, 1))
+    al = 1 - cdf_evt(Y_ex[-1] - Y_K[-1], Y.size, ga, b, K) #evaluate tail CDF at top excess, or second top, etc.
+    var = Y_ex[-1]
+    Y_ex_in = Y_ex[:(K-1)]
 
-    for k in range(M):
-        #perform M trials
-        total_cost = np.zeros(N)
-        x = x_i*np.ones(N)
+    t2 = (Y_ex_in[Y_ex_in > mu] - mu).sum() / Y.size
+    t3 = al * (cvar_evt(0, var, ga, b, Y_K[-1]) - mu)
 
-        for i in range(11):
-            #evaluate current cost, add to total -> loop over the time horizon here
-            total_cost = total_cost + cost(x, ub_k, lb_k, 1)
-            u_min = np.zeros(N)
-            Z_min = 100.0*np.ones(N)
+    return mu + beta * (t1 + t2 + t3)
 
-            for j in range(int((U_max - U_min) / dU) + 1):
-                #action selection, loop over possible actions
-                u = U[j]
+def mle_evt(Y_ex):
+    mle = minimize(neg_loglike, np.array([logit(0.5), np.log(0.5)]), args=(Y_ex))
+    return np.array([expit(mle.x[0]), np.exp(mle.x[1])])
 
-                #sample w_i n times, run through dynamics
-                w_mc = np.array([np.random.normal(0, std) for w in range(int(eparams[1]))])
-                for v in range(N):
-                    #this whole loop can definitely be vectorized, to a degree
-                    x_pmc = dynamics_snap(x[v], u, w_mc, dparams, ub, lb)
+#this assumes Y is an Nx1 vector, McNeil 7.14
+def neg_loglike(x, Y):
+    #the transformations here allow us to constrain ga in (0,1), b in (0, \infty)
+    ga = expit(x[0])
+    b = np.exp(x[1])
+    N = Y.size
 
-                    #use our 'simulator' to get n observations of c(x_{t+1})
-                    Z = cost(x_pmc, ub_k, lb_k, int(eparams[1]))
+    return N * np.log(b) + (1 + 1/ga) * np.log(1 + ga * Y / b).sum()
 
-                    #apply estimators to evaluate that action in 4 distinct ways
-                    if v == 0:
-                        Z_eval = estimator_mean(Z, eparams)
-                    elif v == 1:
-                        Z_eval = estimator_max(Z, eparams)
-                    elif v == 2:
-                        Z_eval = estimator_cvar(Z, eparams)
-                    else:
-                        Z_eval = estimator_moment(Z, eparams)
-                    
-                    #evaluate the running min
-                    if Z_eval < Z_min[v]:
-                        u_min[v] = u
-                        Z_min[v] = Z_eval
+def get_excesses(X, thresh):
+    return np.sort(X[X > thresh]) - thresh
 
-            #update x according to environment, continue
-            w = np.random.normal(0, std)
-            for v in range(N):
-                if v == N - 1:
-                    x[v] = dynamics_snap(x[v:], u_min[v], w, dparams, ub, lb)
-                else:
-                    x[v] = dynamics_snap(x[v:(v + 1)], u_min[v], w, dparams, ub, lb)
-        
-        #store the total cost of this trial
-        cost_arr[k,:] = total_cost
-    
-    return cost_arr
+#only used in gpd_ad
+def get_excesses_ad(X, q):
+    thresh = var_emp(X, 1.0 - q)
+    excesses = np.sort(X[X > thresh]) - thresh
+    return thresh, excesses
+
+def get_threshold(X, code1, code2, n):
+    Y = np.sort(X)
+    if code1 == 0:
+        #naive, takes 90th percentile (will work so long as n >= 11)
+        thresh = Y[np.ceil((1 - 0.10)*n).astype(int) - 1]
+        u = 0.10
+    elif code1 == 1:
+        #implement Bader's selection method here
+        u_start=0.79 
+        u_end=0.98 
+        u_num=20 
+        signif=0.1
+        cutoff=0.9
+
+        u_vals = np.linspace(u_start, u_end, u_num)
+        ad_tests = []
+        pvals = []
+        n_rejected = 0
+
+        #cannot reliably estimate for u >= n-1/n, as then emp_var returns final value, excess is empty set
+        for u in u_vals[u_vals < (n-1)/n]: 
+            thresh, stat, ga, b = gpd_ad(X, code2, u) #how does this work?
+            if ga <= cutoff:
+                ad_tests.append([thresh, u])
+                pvals.append(ad_pvalue(stat, ga))
+            else:
+                n_rejected += 1
+
+        if len(ad_tests) == 0:
+            #if test fails, return naive 90th percentile
+            return Y[(np.ceil((1 - 0.10)*n) - 1).astype(int)], 0.10
+
+        ad_tests = np.asarray(ad_tests)
+        pvals = np.asarray(pvals)
+
+        kf, stop = forward_stop(pvals, signif)
+        thresh, u = ad_tests[stop]
+    return thresh, u
+
+def get_parameters(code, excesses):
+    if code == 0:
+        #pwme
+        (ga, b) = estimator_pwme(excesses) #assume excesses have been sorted
+    elif code == 1:
+        #mle
+        ga, _, b = st.genpareto.fit(excesses)
+    return ga, b
+
+def var_emp(X, al):
+    Y = np.sort(X)
+    return np.sort(X)[(np.ceil((1 - al)*len(X)) - 1).astype(int)] #evaluate order-statistics at ceil((1 - al)*n)
+
+#Use Bayes rule to get tail probability above threshold, invert
+def var_evt(al, ga, b, u, K, n):
+    if np.abs(ga) < 0.001:
+        var = u - b * np.log(al * n / K)
+    else:
+        var = u + (b / ga) * ((al * n / K)**(-ga) - 1)
+    return var
+
+## functions from Troop (2019) (Y_ex, n, ga, b)
+def gpd_ad(X, code, u):
+    thresh, Y_ex = get_excesses_ad(X, u)
+    ga, b = get_parameters(code, Y_ex)
+    Z = st.genpareto.cdf(Y_ex, ga, 0, b)
+
+    n = len(Z)
+    i = np.linspace(1, n, n)
+
+    stat = -n - (1/n) * np.sum((2 * i - 1) * (np.log(Z) + np.log1p(-Z[::-1])))
+    return thresh, stat, ga, b
+
+def ad_pvalue(stat, ga):
+    row = np.where(ad_shape == max(round(ga, 2), -0.5))[0][0]
+    if stat > ad_quantiles[row, -1]:
+        xdat = ad_quantiles[row, 950:999]
+        ydat = -np.log(ad_pvals[950:999])
+        lfit = np.polyfit(xdat, ydat, 1)
+        m = lfit[0]
+        b = lfit[1]
+        p = np.exp(-(m*stat+b))
+    else:
+        bound_idx = min(np.where(stat < ad_quantiles[row, ])[0])
+        bound = ad_pvals[bound_idx]
+        if bound == 0.999:
+            p = bound
+        else:
+            x1 = ad_quantiles[row, bound_idx-1]
+            x2 = ad_quantiles[row, bound_idx]
+            y1 = -np.log(ad_pvals[bound_idx-1])
+            y2 = -np.log(ad_pvals[bound_idx])
+            lfit = interp1d([x1, x2], [y1, y2])
+            p = np.exp(-lfit(stat))
+    return p
+
+def forward_stop(pvals, signif):
+    pvals_transformed = np.cumsum(-np.log(1-pvals))/np.arange(1,len(pvals)+1)
+    kf = np.where(pvals_transformed <= signif)[0]
+    if len(kf) == 0:
+        stop = 0
+    else:
+        stop = max(kf) + 1
+    if stop == pvals.size:
+        stop -= 1
+    return kf, stop
 
 def main():
-    #define sysparams [ub, lb, ub_k, lb_k, U_max, U_min, dU]
-    sparams = np.array([23.0, 18.0, 21.0, 20.0, 1.0, 0.0, 0.1, 1.0])
-
-    #define our dynamics parameters
-    dt = 5/60
-    eta = 0.7
-    R = 2.0
-    P = 14.0
-    C = 2.0
-    dparams = np.array([np.exp(-dt/(C*R)), 32.0, eta*R*P ])
-
-    #define our estimator parameters (an array of all floats: we cast to int when necessary)
-    #this is so it can be accelerated using numba, cannot have mixed-type arrays/lists
-    eparams = np.array([0.05, 1000.0, 0.0, 0.0]) #al, n, est_code, t
-
-    M = 100
-    start = time.time()
-    print("hello")
-    cost_arr = mc_run(20.5, 4, M, eparams, sparams, dparams)
-    print(cost_arr)
-    end = time.time()
-    print(end - start)
+    print("Hello world")
 
 if __name__ == "__main__":
     main()

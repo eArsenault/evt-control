@@ -5,8 +5,10 @@ import helper_functions as hf
 import os
 
 #test parameters - M is number of trials, N is samples/trial
-M = 1000
-N_arr = [i + 5 for i in range(46)]
+M = 100
+code1 = 1
+code2 = 0
+N_arr = [i + 21 for i in range(79)]
 
 rvs_arr = [st.weibull_min, st.lognorm, st.fisk]
 c_arr = np.array([0.5, 0.5, 2.0])
@@ -15,33 +17,33 @@ norm_arr_h = np.zeros((len(N_arr), M))
 norm_arr_e = np.zeros((len(N_arr), M))
 seed_arr = hf.get_seeds(len(N_arr), 123456)
 
-
 for r in range(len(rvs_arr)):
     for j in range(len(N_arr)):
         #generate samples from distribution
         X = hf.gen(M, N_arr[j], rvs_arr[r], c_arr[r], seed_arr[j])
-        t = np.linspace(0,50,1001)
+        t = np.linspace(0,100,2001)
 
         #apply EVT estimator to each trial to get M values of z_mk, find qth quantile z_star and indices z_mk <= z_star
-        z_arr = np.zeros(M)
         for i in range(M):
-            params = hf.estimator_pwme(X[i,:], 0.05, N_arr[j])
-            if params[-1] == 0:
-                norm_arr_h[j,i] = 0
-                norm_arr_e[j,i] = 0
+            thresh = hf.get_threshold(X[i,:], code1, code2, N_arr[j])[0]
+            Y_ex = hf.get_excesses(X[i, :], thresh)
+            ga, b = hf.get_parameters(code2, Y_ex) #0 - pwme, 1 - mle
+
+            t_z = t[t >= thresh]
+            if t_z.shape == (0,):
+                norm_arr_h[j,i] = np.nan
+                norm_arr_e[j,i] = np.nan
             else:
-                z = params[-1]
-                t_z = t[t >= z]
                 F_gt = hf.cdf_gt(t_z, rvs_arr[r], c_arr[r])
 
                 norm_arr_h[j,i] = np.abs(hf.cdf_emp(t_z, X[i,:]) - F_gt).max() 
-                norm_arr_e[j,i] = np.abs(hf.cdf_evt(t_z, params) - F_gt).max()
+                norm_arr_e[j,i] = np.abs(hf.cdf_evt(t_z - thresh, N_arr[j], ga, b, Y_ex.size) - F_gt).max()
 
         print("Iteration done for N ==", N_arr[j])
 
     #filter zero-values, these are where z_arr == 0 OR z_arr > z_star
-    norm_h_mean = norm_arr_h.mean(axis=1, where=norm_arr_h>0)
-    norm_h_std = norm_arr_h.std(axis=1, where=norm_arr_h>0)
+    norm_h_mean = np.nanmean(np.where(norm_arr_h > 0, norm_arr_h, np.nan), axis=1)
+    norm_h_std = np.nanstd(np.where(norm_arr_h > 0, norm_arr_h, np.nan), axis=1)
 
     norm_e_mean = np.nanmean(np.where(norm_arr_e > 0, norm_arr_e, np.nan), axis=1)
     norm_e_std = np.nanstd(np.where(norm_arr_e > 0, norm_arr_e, np.nan), axis=1)

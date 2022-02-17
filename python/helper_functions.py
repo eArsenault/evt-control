@@ -3,6 +3,7 @@ import random
 import scipy.stats as st
 from scipy.special import expit, logit
 from scipy.optimize import minimize
+from scipy.linalg import norm
 from statsmodels.distributions.empirical_distribution import ECDF
 from scipy.interpolate import interp1d
 
@@ -108,7 +109,24 @@ def ground_truth(N, al, rvs_arr, c_arr, file_name):
 
     np.save(file_name, np.vstack((var_arr, cvar_arr)))
 
-def ground_truth_meansemi(N, rvs_arr, c_arr, beta, file_name):
+def ground_truth_eval(rvs_arr, c_arr, beta, tol, file_name):
+    #set parameters, initial value of algorithm
+    N = 100000
+    mul = 1
+    delta = tol + 1
+    X = ground_truth_meansemi(mul * N, rvs_arr, c_arr, beta)
+
+    while (delta > tol) and (mul < 50):
+        mul = mul + 1
+        Xnew = ground_truth_meansemi(mul * N, rvs_arr, c_arr, beta)
+        delta = norm(Xnew - X) #delta is 2-norm of the difference between successive iterates
+
+        X = Xnew
+
+    print("Ground truth computed, delta =",delta, ", iterations =", mul - 1)
+    np.save(file_name, X)
+
+def ground_truth_meansemi(N, rvs_arr, c_arr, beta):
     est_arr = np.zeros(len(rvs_arr))
 
     for r in range(len(rvs_arr)):
@@ -119,7 +137,7 @@ def ground_truth_meansemi(N, rvs_arr, c_arr, beta, file_name):
 
         est_arr[r] = meansemi_emp(Y, beta)
 
-    np.save(file_name, est_arr)
+    return est_arr
 
 def meansemi_emp(Y, beta):
     mu = Y.sum() / Y.size

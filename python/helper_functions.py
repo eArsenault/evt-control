@@ -84,10 +84,10 @@ def exp_ult_evt(Y, utility, param, code1, code2):
     return t1 + t2 + t3
 
 def gen(M, K, rv, c, s):
-    return rv.rvs(c, loc=0, scale=1, size=(M,K), random_state=np.random.RandomState(seed=s))
-
-def gen_noparam(M, K, rv, s):
-    return rv.rvs(loc=0, scale=1, size=(M,K), random_state=np.random.RandomState(seed=s))
+    if hasattr(c,'__iter__'):
+        return rv.rvs(*c, loc=0, scale=1, size=(M,K), random_state=np.random.RandomState(seed=s))
+    else:
+        return rv.rvs(loc=0, scale=1, size=(M,K), random_state=np.random.RandomState(seed=s))
 
 def get_seeds(N, s):
     #initialize the random state within the function
@@ -109,16 +109,16 @@ def ground_truth(N, al, rvs_arr, c_arr, file_name):
 
     np.save(file_name, np.vstack((var_arr, cvar_arr)))
 
-def ground_truth_eval(rvs_arr, c_arr, beta, tol, file_name):
+def ground_truth_eval(rvs_arr, c_arr, tol, file_name):
     #set parameters, initial value of algorithm
     N = 100000
     mul = 1
     delta = tol + 1
-    X = ground_truth_meansemi(mul * N, rvs_arr, c_arr, beta)
+    X = ground_truth_exp(mul * N, rvs_arr, c_arr)
 
     while (delta > tol) and (mul < 50):
         mul = mul + 1
-        Xnew = ground_truth_meansemi(mul * N, rvs_arr, c_arr, beta)
+        Xnew = ground_truth_exp(mul * N, rvs_arr, c_arr)
         delta = norm(Xnew - X) #delta is 2-norm of the difference between successive iterates
 
         X = Xnew
@@ -126,18 +126,34 @@ def ground_truth_eval(rvs_arr, c_arr, beta, tol, file_name):
     print("Ground truth computed, delta =",delta, ", iterations =", mul - 1)
     np.save(file_name, X)
 
-def ground_truth_meansemi(N, rvs_arr, c_arr, beta):
+def ground_truth_exp(N, rvs_arr, c_arr):
     est_arr = np.zeros(len(rvs_arr))
 
     for r in range(len(rvs_arr)):
-        if np.isnan(c_arr[r]):
-            Y = gen_noparam(1, N, rvs_arr[r], 272542).flatten()
-        else:
-            Y = gen(1, N, rvs_arr[r], c_arr[r], 272542).flatten()
-
-        est_arr[r] = meansemi_emp(Y, beta)
+        Y = gen(1, N, rvs_arr[r], c_arr[r], 272542).flatten()
+        est_arr[r] = rfunction_exp(Y)
 
     return est_arr
+
+def rfunction_exp(Y):
+    mu = Y.sum() / Y.size
+    return (Y[Y > mu] - mu).sum() / Y.size
+
+def rfunction_evt(Y, ga, b, K):
+    Y.sort()
+    Y_K = Y[:(Y.size - K)] #sample below, including the VaR
+    Y_ex = Y[(Y.size - K):] #samples above the VaR
+
+    mu = Y.sum() / Y.size
+    al = 1 - cdf_evt(Y_ex[-1] - Y_K[-1], Y.size, ga, b, K) #evaluate tail CDF at top excess, or second top, etc.
+    var = Y_ex[-1]
+    Y_ex_in = Y_ex[:(K-1)]
+
+    t1 = (Y_K[Y_K > mu] - mu).sum() / Y.size
+    t2 = (Y_ex_in[Y_ex_in > mu] - mu).sum() / Y.size
+    t3 = al * (cvar_evt(0, var, ga, b, Y_K[-1]) - mu)
+
+    return t1 + t2 + t3
 
 def meansemi_emp(Y, beta):
     mu = Y.sum() / Y.size

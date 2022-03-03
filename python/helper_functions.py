@@ -137,23 +137,18 @@ def ground_truth_exp(N, rvs_arr, c_arr):
 
 def rfunction_exp(Y):
     mu = Y.sum() / Y.size
-    return (Y[Y > mu] - mu).sum() / Y.size
+    var = var_emp(Y, 0.01)
+    return (Y[Y >= var] - mu).sum() / Y.size
 
 def rfunction_evt(Y, ga, b, K):
     Y.sort()
     Y_K = Y[:(Y.size - K)] #sample below, including the VaR
-    Y_ex = Y[(Y.size - K):] #samples above the VaR
+    #Y_ex = Y[(Y.size - K):] #samples above the VaR
 
     mu = Y.sum() / Y.size
-    al = 1 - cdf_evt(Y_ex[-1] - Y_K[-1], Y.size, ga, b, K) #evaluate tail CDF at top excess, or second top, etc.
-    var = Y_ex[-1]
-    Y_ex_in = Y_ex[:(K-1)]
-
-    t1 = (Y_K[Y_K > mu] - mu).sum() / Y.size
-    t2 = (Y_ex_in[Y_ex_in > mu] - mu).sum() / Y.size
-    t3 = al * (cvar_evt(0, var, ga, b, Y_K[-1]) - mu)
-
-    return t1 + t2 + t3
+    al = 0.01
+    var = var_evt(al, ga, b, Y_K[-1], K, Y.size)
+    return al * (cvar_evt(0, var, ga, b, Y_K[-1]) - mu)
 
 def meansemi_emp(Y, beta):
     mu = Y.sum() / Y.size
@@ -248,7 +243,6 @@ def get_parameters(code, excesses):
     return ga, b
 
 def var_emp(X, al):
-    Y = np.sort(X)
     return np.sort(X)[(np.ceil((1 - al)*len(X)) - 1).astype(int)] #evaluate order-statistics at ceil((1 - al)*n)
 
 #Use Bayes rule to get tail probability above threshold, invert
